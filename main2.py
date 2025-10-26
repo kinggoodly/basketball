@@ -49,7 +49,7 @@ while True:
         right_behind = rw.z > rs.z + 0.1
         left_behind  = lw.z > ls.z + 0.1
 
-    # --- Hand speed ---
+
     if left and prev_left:
         left_speed_y, left_speed_x = left[1]-prev_left[1], left[0]-prev_left[0]
     prev_left = left
@@ -57,7 +57,6 @@ while True:
         right_speed_y, right_speed_x = right[1]-prev_right[1], right[0]-prev_right[0]
     prev_right = right
 
-    # --- Ball physics ---
     if not state["holding"]:
         if state["side_mode"] and time.time()-state["side_mode_time"] < SIDE_ASSIST_DURATION:
             state["ball_vy"] += GRAVITY * 0.4
