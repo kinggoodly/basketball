@@ -2,6 +2,7 @@ using UnityEngine;
 using NativeWebSocket;
 using System.Collections;
 using Newtonsoft.Json.Linq;
+using UnityEngine.InputSystem;
 
 public class UnityReceiver_Native : MonoBehaviour
 {
@@ -19,19 +20,22 @@ public class UnityReceiver_Native : MonoBehaviour
     public float spinSpeed = 480f;
     public float spinThreshold = 0.002f;
 
+    [Header("Joystick Settings")]
+    public float moveSpeed = 3f;
+
     bool isConnecting = false;
     bool isShooting = false;
-    bool ignorePython = false;   // ⛔ ignore python updates during animation
+    bool ignorePython = false;
 
     Vector3 targetPos;
     Vector3 lastPosition;
-    Vector3 initialBallPos;      // 🟢 store wherever the ball starts
+    Vector3 initialBallPos;
+    Vector3 manualOffset = Vector3.zero;  // 🕹️ joystick/keyboard offset
 
     void Start()
     {
         lastPosition = Vector3.zero;
 
-        // 🟢 Remember the ball's starting position
         if (ball != null)
             initialBallPos = ball.transform.position;
 
@@ -61,7 +65,7 @@ public class UnityReceiver_Native : MonoBehaviour
 
         ws.OnOpen += () =>
         {
-            Debug.Log("✅ Connected to Python WebSocket");
+            Debug.Log("Connected to Python WebSocket");
             isConnecting = false;
         };
 
@@ -74,13 +78,13 @@ public class UnityReceiver_Native : MonoBehaviour
 
         ws.OnError += (e) =>
         {
-            Debug.LogError("❌ WebSocket Error: " + e);
+            Debug.LogError("WebSocket Error: " + e);
             isConnecting = false;
         };
 
         ws.OnClose += (e) =>
         {
-            Debug.Log("🔴 WebSocket Closed, will retry...");
+            Debug.Log("WebSocket Closed, will retry...");
             isConnecting = false;
         };
 
@@ -96,7 +100,7 @@ public class UnityReceiver_Native : MonoBehaviour
         bool? shotIn = data["shot_in"]?.Type == JTokenType.Boolean ? (bool?)data["shot_in"] : null;
         bool currentShot = shotIn ?? false;
 
-        // 🎨 Color feedback
+        // Color feedback
         Renderer r = ball.GetComponent<Renderer>();
         if (r != null)
         {
@@ -105,10 +109,10 @@ public class UnityReceiver_Native : MonoBehaviour
             else r.material.color = Color.yellow;
         }
 
-        // ⛔ Ignore python updates during animation
+        // Ignore python updates during animation
         if (ignorePython) return;
 
-        // 🟢 Update ball position relative to start
+        // Update ball position relative to start
         JObject ballData = data["ball"] as JObject;
         if (ballData != null)
         {
@@ -122,7 +126,7 @@ public class UnityReceiver_Native : MonoBehaviour
             targetPos = initialBallPos + new Vector3(normalizedX, fixedY - 2.5f, 0);
         }
 
-        // 🏀 Trigger shot only once when shot_in changes from false → true
+        // Trigger shot only once when shot_in changes from false → true
         if (currentShot && !lastShotState && !isShooting)
         {
             StartCoroutine(ShootToRim());
@@ -146,7 +150,7 @@ public class UnityReceiver_Native : MonoBehaviour
         float dynamicArc = Mathf.Clamp(distance * 0.8f, 2f, arcHeight);
         float t = 0f;
 
-        // 🟢 Flight phase (arc)
+        // Flight phase
         while (t < 1f)
         {
             t += Time.deltaTime / duration;
@@ -159,25 +163,18 @@ public class UnityReceiver_Native : MonoBehaviour
             yield return null;
         }
 
-        // 🟡 Detect floor height automatically
-        float floorY = 0.5f; // fallback value
+        // Detect floor
+        float floorY = 0.5f;
         GameObject floorObj = GameObject.Find("floor");
         if (floorObj == null) floorObj = GameObject.Find("Ground");
-
         if (floorObj != null)
         {
             Collider floorCol = floorObj.GetComponent<Collider>();
             if (floorCol != null)
-            {
-                floorY = floorCol.bounds.max.y + 0.01f; // 🟢 real top of collider
-            }
-            else
-            {
-                floorY = floorObj.transform.position.y - 2f; // 🟠 fallback offset
-            }
+                floorY = floorCol.bounds.max.y + 0.01f;
         }
 
-        // 🟡 Drop phase (forward + gravity)
+        // Drop phase
         float dropSpeed = shotSpeed * (dropAfterShot * 0.5f);
         float forwardSpeed = 2.2f;
         Vector3 direction = (endPos - startPos).normalized;
@@ -189,46 +186,29 @@ public class UnityReceiver_Native : MonoBehaviour
             dropPos.y -= Time.deltaTime * dropSpeed;
             dropPos.y = Mathf.Max(dropPos.y, floorY);
             ball.transform.position = dropPos;
-            ball.transform.Rotate(Vector3.right * Time.deltaTime * -spinSpeed * 0.8f);
             yield return null;
         }
 
-        // 🟠 First bounce
-        Vector3 bounceStart = ball.transform.position;
-        float bounceHeight = 3f;
-        float bounceForward = 2f;
-        float bounceT = 0f;
-
-        while (bounceT < 1f)
+        // Three Bounces (progressively smaller)
+        for (int i = 0; i < 3; i++)
         {
-            bounceT += Time.deltaTime * 1.8f;
-            float bounceY = Mathf.Sin(bounceT * Mathf.PI) * bounceHeight;
-            Vector3 pos = bounceStart + direction * (bounceForward * bounceT);
-            pos.y = Mathf.Max(floorY + bounceY, floorY);
-            ball.transform.position = pos;
-            ball.transform.Rotate(Vector3.right * Time.deltaTime * -spinSpeed);
-            yield return null;
+            float height = Mathf.Lerp(3f, 0.7f, i / 2f);  // 3 → 1.85 → 0.7
+            float forward = Mathf.Lerp(2f, 0.4f, i / 2f); // forward distance shrinks
+            float bounceT = 0f;
+
+            while (bounceT < 1f)
+            {
+                bounceT += Time.deltaTime * (1.8f + i * 0.4f);
+                float bounceY = Mathf.Sin(bounceT * Mathf.PI) * height;
+                Vector3 pos = ball.transform.position + direction * (forward * Time.deltaTime * 2f);
+                pos.y = Mathf.Max(floorY + bounceY, floorY);
+                ball.transform.position = pos;
+                yield return null;
+            }
         }
 
-        // 🔵 Second smaller bounce
-        Vector3 secondStart = ball.transform.position;
-        float secondHeight = 0.7f;
-        float secondForward = 0.5f;
-        float secondT = 0f;
-
-        while (secondT < 1f)
-        {
-            secondT += Time.deltaTime * 2.2f;
-            float bounceY = Mathf.Sin(secondT * Mathf.PI) * secondHeight;
-            Vector3 pos = secondStart + direction * (secondForward * secondT);
-            pos.y = Mathf.Max(floorY + bounceY, floorY);
-            ball.transform.position = pos;
-            ball.transform.Rotate(Vector3.right * Time.deltaTime * -spinSpeed * 0.6f);
-            yield return null;
-        }
-
-        // ✋ Return to hand
-        Vector3 handPos = initialBallPos;
+        // Return to hand
+        Vector3 handPos = initialBallPos + manualOffset;
         Vector3 returnStart = ball.transform.position;
         float returnT = 0f;
 
@@ -238,41 +218,74 @@ public class UnityReceiver_Native : MonoBehaviour
             Vector3 pos = Vector3.Lerp(returnStart, handPos, Mathf.SmoothStep(0, 1, returnT));
             pos.y = Mathf.Max(pos.y, floorY);
             ball.transform.position = pos;
-            ball.transform.Rotate(Vector3.right * Time.deltaTime * spinSpeed * 0.4f);
             yield return null;
         }
 
-        // ✅ Resume Python control
         isShooting = false;
         ignorePython = false;
     }
+void Update()
+{
+    ws?.DispatchMessageQueue();
 
-    void Update()
+    // 🎮 1️⃣ Read joystick or keyboard input manually
+    Vector2 moveInput = Vector2.zero;
+
+    // ✅ Gamepad analog stick
+    if (Gamepad.current != null)
     {
-        ws?.DispatchMessageQueue();
-
-        // 🟢 Smooth follow during Python control
-        if (ball != null && !ignorePython)
-        {
-            ball.transform.position = Vector3.Lerp(
-                ball.transform.position,
-                targetPos,
-                Time.deltaTime * moveSmooth
-            );
-        }
-
-        // 🔄 Spin system
-        if (ball != null)
-        {
-            float velocity = (ball.transform.position - lastPosition).sqrMagnitude;
-            if (velocity > 0.000001f)
-            {
-                float dynamicSpin = Mathf.Lerp(spinSpeed * 0.5f, spinSpeed * 1.5f, Mathf.Clamp01(velocity * 1000f));
-                ball.transform.Rotate(Vector3.right * Time.deltaTime * dynamicSpin);
-            }
-            lastPosition = ball.transform.position;
-        }
+        moveInput = Gamepad.current.leftStick.ReadValue();
     }
+
+    // ✅ Fallback to keyboard
+    if (Keyboard.current != null)
+    {
+        if (Keyboard.current.wKey.isPressed) moveInput.y += 1;
+        if (Keyboard.current.sKey.isPressed) moveInput.y -= 1;
+        if (Keyboard.current.dKey.isPressed) moveInput.x += 1;
+        if (Keyboard.current.aKey.isPressed) moveInput.x -= 1;
+    }
+
+    // normalize diagonal movement
+    moveInput = Vector2.ClampMagnitude(moveInput, 1f);
+
+    // 🧭 2️⃣ Apply joystick offset locally
+    Vector3 delta = new Vector3(moveInput.x, 0, moveInput.y) * moveSpeed * Time.deltaTime;
+    manualOffset += delta;
+
+    // 🧠 3️⃣ Combine Python position + manual offset
+    if (ball != null && !ignorePython)
+    {
+        Vector3 combinedTarget = targetPos + manualOffset;
+        ball.transform.position = Vector3.Lerp(ball.transform.position, combinedTarget, Time.deltaTime * moveSmooth);
+    }
+
+    // 🔄 4️⃣ Ball spin
+    if (ball != null)
+    {
+        float velocity = (ball.transform.position - lastPosition).sqrMagnitude;
+        if (velocity > 0.000001f)
+        {
+            float dynamicSpin = Mathf.Lerp(spinSpeed * 0.5f, spinSpeed * 1.5f, Mathf.Clamp01(velocity * 1000f));
+            ball.transform.Rotate(Vector3.right * Time.deltaTime * dynamicSpin);
+        }
+        lastPosition = ball.transform.position;
+    }
+
+    // 📨 5️⃣ Send movement data to Python
+    if (ws != null && ws.State == WebSocketState.Open)
+    {
+        JObject msg = new JObject();
+        msg["type"] = "input";
+        msg["move_x"] = moveInput.x;
+        msg["move_y"] = moveInput.y;
+        msg["offset_x"] = manualOffset.x;
+        msg["offset_z"] = manualOffset.z;
+
+        ws.SendText(msg.ToString());
+        Debug.Log($"[SEND→PYTHON] move=({moveInput.x:F2},{moveInput.y:F2})");
+    }
+}
 
     private void OnApplicationQuit() => ws?.Close();
 }
