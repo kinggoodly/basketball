@@ -1,6 +1,4 @@
-import cv2
-import time
-from config import *
+from utils import *
 
 def shoot_real(state):
     state["holding"] = False
